@@ -13565,6 +13565,15 @@ test_119e()
 		iflag=direct oflag=direct ||
 		error "trivial unaligned dio failed"
 
+	# Test of disabling unaligned DIO support
+	$LCTL set_param llite.*.unaligned_dio=0
+	stack_trap "$LCTL set_param llite.*.unaligned_dio=1"
+	echo "testing disabling unaligned DIO - 'invalid argument' expected:"
+	dd if=$DIR/$tfile.1 bs=1024 of=$DIR/$tfile.2 count=4 \
+		iflag=direct oflag=direct &&
+		error "unaligned dio succeeded when disabled"
+	$LCTL set_param llite.*.unaligned_dio=1
+
 	# Clean up before next part of test
 	rm -f $DIR/$tfile.2
 
@@ -14442,6 +14451,35 @@ test_123f() {
 	$LCTL set_param llite.*.statahead_batch_max=$batch_max
 }
 run_test 123f "Retry mechanism with large wide striping files"
+
+test_123g() {
+	local dir=$DIR/$tdir
+	local num=1000
+
+	mkdir $dir || error "failed to mkdir $dir"
+	createmany -o $dir/$tfile $num || error "failed creatmany files"
+	cancel_lru_locks mdc
+	cancel_lru_locks osc
+
+	$LCTL set_param llite.*.statahead_stats=clear
+	$LCTL set_param mdc.*.batch_stats=clear
+	aheadmany -c stat -s 0 -e $num -b $tfile -d $dir ||
+		error "aheadmany $dir with $tfile failed"
+	wait_update_facet client "pgrep ll_sa" "" 35 ||
+		error "ll_sa thread is still running"
+	$LCTL get_param -n llite.*.statahead_stats
+	$LCTL get_param -n mdc.*.batch_stats
+
+	local count
+
+	count=$($LCTL get_param -n llite.*.statahead_stats |
+		awk '/hit.total:/ {print $2}')
+	echo "Hit total: $count"
+	# Hit ratio should be >= 75%
+	(( $count > num * 75 / 100)) ||
+		error "hit total $count is be > 75% of $num"
+}
+run_test 123g "Test for stat-ahead advise"
 
 test_124a() {
 	[ $PARALLEL == "yes" ] && skip "skip parallel run"
